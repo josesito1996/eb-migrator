@@ -91,7 +91,7 @@ public final class InteractiveConsole {
         System.out.println("  3) swap              Intercambiar URLs (afecta producción)");
         System.out.println("  4) repoint-pipeline  Reapuntar la etapa Deploy de CodePipeline al nuevo env");
         System.out.println("  5) terminate         Dar de baja un environment (destructivo)");
-        System.out.println("  6) power             Suspender autoescalado / apagar / encender");
+        System.out.println("  6) power             Escalado on/off · apagar/encender/reiniciar/terminar instancia");
         System.out.println("  0) salir");
         System.out.println("------------------------------------------------------");
     }
@@ -123,8 +123,12 @@ public final class InteractiveConsole {
 
     private void doPower(AwsClients aws) {
         String env = Cli.promptRequired("Environment");
-        String state = Cli.prompt("Estado (off=apagar / on=encender / manage=reanudar ASG)", "off");
-        System.out.println("Recuerda: off/on necesitan un perfil con permisos EC2 (ej. default).");
+        System.out.println("Estados disponibles:");
+        System.out.println("  scaling-off / scaling-on    desactivar / reactivar el escalado (ASG)");
+        System.out.println("  stop / start / reboot       apagar / encender / reiniciar la instancia");
+        System.out.println("  terminate-instance          destruir la instancia EC2");
+        String state = Cli.prompt("Estado", "scaling-off");
+        System.out.println("Recuerda: stop/start/reboot/terminate-instance necesitan un perfil con permisos EC2 (ej. default).");
         new PowerCommand(aws, false).run(env, state);
     }
 }

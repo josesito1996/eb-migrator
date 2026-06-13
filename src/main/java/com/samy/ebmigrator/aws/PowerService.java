@@ -3,6 +3,8 @@ package com.samy.ebmigrator.aws;
 import software.amazon.awssdk.services.autoscaling.model.AutoScalingGroup;
 import software.amazon.awssdk.services.ec2.model.Instance;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -96,6 +98,12 @@ public final class PowerService {
         aws.ec2().startInstances(b -> b.instanceIds(instanceIds));
     }
 
+    /** Reinicia (reboot) las instancias indicadas. Requiere {@code ec2:RebootInstances}. */
+    public void reboot(List<String> instanceIds) {
+        if (instanceIds.isEmpty()) return;
+        aws.ec2().rebootInstances(b -> b.instanceIds(instanceIds));
+    }
+
     /**
      * Instancias EC2 todavía vivas (no terminadas) etiquetadas con este environment.
      * Sirve para detectar "huérfanas" que impiden terminar el environment (retienen el
@@ -112,5 +120,29 @@ public final class PowerService {
                 .flatMap(r -> r.instances().stream())
                 .map(Instance::instanceId)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Termina (destruye) las instancias indicadas. Requiere {@code ec2:TerminateInstances}.
+     * Se usa para limpiar instancias huérfanas que retienen el Security Group y atascan el
+     * terminate del environment (incluso si están {@code stopped}).
+     */
+    public void terminateInstances(List<String> instanceIds) {
+        if (instanceIds.isEmpty()) return;
+        aws.ec2().terminateInstances(b -> b.instanceIds(instanceIds));
+    }
+
+    /**
+     * Espera a que ya no queden instancias vivas del environment (terminadas de verdad),
+     * para que el Security Group quede libre antes de reintentar el terminate del environment.
+     * Devuelve {@code true} si todas desaparecieron antes del timeout.
+     */
+    public boolean waitInstancesGone(String envId, Duration timeout) throws InterruptedException {
+        Instant deadline = Instant.now().plus(timeout);
+        while (Instant.now().isBefore(deadline)) {
+            if (liveInstanceIds(envId).isEmpty()) return true;
+            Thread.sleep(10_000);
+        }
+        return liveInstanceIds(envId).isEmpty();
     }
 }

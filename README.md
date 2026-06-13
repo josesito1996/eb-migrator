@@ -91,7 +91,7 @@ java -jar target/eb-migrator-1.0.0.jar <comando> [--flags]
 | `swap --from VIEJO --to NUEVO` | Intercambia los CNAMEs para preservar la URL. Reversible. | **Sí** |
 | `repoint-pipeline --from VIEJO --to NUEVO` | Reapunta la etapa Deploy de CodePipeline (clave `EnvironmentName`) del environment viejo al nuevo. Escanea todos los pipelines, hace backup y cambio quirúrgico. **Requiere permisos CodePipeline** (`--profile default`). Reversible (invierte `--from/--to`). | Pipeline (no toca tráfico) |
 | `terminate --env NOMBRE` | Da de baja un environment. **Destructivo**, exige teclear el nombre exacto. Espera a `Terminated` real y detecta huérfanas. | Destructivo |
-| `power --env NOMBRE --state off\|on\|manage` | Controla el autoescalado y el encendido (ver §6). | Apaga/enciende |
+| `power --env NOMBRE --state ESTADO` | Controla el **escalado** (`scaling-off`/`scaling-on`) y la **instancia** (`stop`/`start`/`reboot`/`terminate-instance`). Ver §6. | Según estado |
 
 **Flags globales:**
 
@@ -165,36 +165,54 @@ java -jar target/eb-migrator-1.0.0.jar swap --from Samyappcasos-env-al2023 --to 
 
 ---
 
-## 6. Apagar/encender environments y autoescalado (`power`)
+## 6. Escalado e instancia (`power`)
 
 Todo environment de EB —incluso *SingleInstance*— tiene un **Auto Scaling Group con Min=Max=Desired=1**
-que "auto-sana": si apagas la instancia, **la vuelve a lanzar**. El comando `power` controla eso.
+que "auto-sana": si apagas la instancia, **la vuelve a lanzar**. El comando `power` controla por
+separado dos cosas: el **ESCALADO** (el ASG) y la **INSTANCIA** (encender/apagar/reiniciar/terminar).
+
+| `--state` | Categoría | Qué hace | ¿Perfil EC2? |
+|---|---|---|---|
+| `scaling-off` | Escalado | **Desactiva el escalado**: suspende el ASG (deja de auto-reponer/auto-sanar). No toca la instancia. | No (`eb-manager` vale) |
+| `scaling-on` | Escalado | **Reactiva el escalado**: reanuda el ASG (EB vuelve a gestionar). | No |
+| `stop` | Instancia | Apaga la instancia (stop) y desactiva el escalado para que no la reponga. Conserva el EBS. | **Sí** |
+| `start` | Instancia | Enciende la instancia (start). El escalado sigue desactivado (control manual). | **Sí** |
+| `reboot` | Instancia | Reinicia la instancia (reboot). No toca el escalado. | **Sí** |
+| `terminate-instance` | Instancia | **Destruye** la instancia EC2. Si el escalado está activo, EB lanza una nueva (reciclado); si está desactivado, queda sin instancia. No da de baja el environment. | **Sí** |
+
+> Alias retrocompatibles: `off`=`stop`, `on`=`start`, `manage`=`scaling-on`, `restart`=`reboot`.
 
 ```bash
-# Apagar (suspende el ASG para que no reponga, y hace stop de la instancia; conserva el EBS)
-java -jar target/eb-migrator-1.0.0.jar power --env Samyappcasos-env-al2023 --state off --profile default
+# DEV: apagar de noche para no generar costo (y poder encender por la mañana)
+java -jar target/eb-migrator-1.0.0.jar power --env Samyappusuarios-env-al2023 --state stop  --profile default
+java -jar target/eb-migrator-1.0.0.jar power --env Samyappusuarios-env-al2023 --state start --profile default
 
-# Encender (start). El ASG queda suspendido → gestión manual
-java -jar target/eb-migrator-1.0.0.jar power --env Samyappcasos-env-al2023 --state on  --profile default
+# PROD: desactivar el escalado (uso bajo, no se quiere auto-reponer/auto-sanar) y dejarla encendida
+java -jar target/eb-migrator-1.0.0.jar power --env Samyappusuarios-env-prod --state scaling-off
 
-# Devolver el auto-sanado a EB (reanuda el ASG) — estado normal
-java -jar target/eb-migrator-1.0.0.jar power --env Samyappcasos-env-al2023 --state manage
+# Reiniciar / reciclar la instancia
+java -jar target/eb-migrator-1.0.0.jar power --env Samyappusuarios-env-prod --state reboot             --profile default
+java -jar target/eb-migrator-1.0.0.jar power --env Samyappusuarios-env-prod --state terminate-instance --profile default
+
+# Volver a la gestión normal de EB (reactivar escalado/auto-sanado)
+java -jar target/eb-migrator-1.0.0.jar power --env Samyappusuarios-env-al2023 --state scaling-on
 ```
 
-| `--state` | Qué hace |
-|---|---|
-| `off` | Suspende los procesos del ASG **y** apaga (stop) las instancias. La app deja de responder. |
-| `on` | Enciende (start) las instancias. El ASG **sigue suspendido** (control manual). |
-| `manage` | Reanuda el ASG: EB vuelve a gestionar (auto-sanado). Úsalo para volver a la normalidad. |
+**Permisos:** las operaciones de **escalado** (`scaling-off`/`scaling-on`) usan el ASG y funcionan con
+`eb-manager`. Las de **instancia** (`stop`/`start`/`reboot`/`terminate-instance`) requieren permisos EC2
+(`ec2:Stop/Start/Reboot/TerminateInstances`), que `eb-manager` (mínimo privilegio) NO tiene → usa
+`--profile default` (admin). Si te falta el permiso, el comando lo dice; en `stop`, el escalado ya
+queda desactivado (solo reintentas el apagado con el perfil admin).
 
-**Permisos:** suspender/reanudar el ASG funciona con `eb-manager`. Pero **apagar/encender instancias
-requiere `ec2:Stop/StartInstances`**, que `eb-manager` (mínimo privilegio) NO tiene → usa
-`--profile default` (admin) para `off`/`on`. Si te falta el permiso, el comando lo dice y, en `off`,
-el ASG ya queda suspendido (solo reintentas el stop con el perfil admin).
-
-> **Producción:** normalmente NO apagas producción (el auto-sanado es deseable). Si alguna vez
-> suspendes un environment y luego quieres terminarlo, **`terminate` reanuda el ASG automáticamente**
-> antes de desmontarlo (ver §7), para no dejar instancias huérfanas que atasquen el borrado.
+> **Casos de uso del usuario:**
+> - **Dev** (`*-env-al2023`): se apaga de noche para ahorrar. Basta `stop` (desactiva escalado + apaga)
+>   y `start` por la mañana. El escalado queda desactivado entre medias, así que no se vuelve a prender solo.
+> - **Prod** (`*-env-prod`): uso bajo, no se quiere autoescalado. `scaling-off` lo deja encendido pero sin
+>   que EB lo reponga/escale. (Para volver al auto-sanado: `scaling-on`.)
+>
+> **Producción:** si dejas un environment con el escalado desactivado y luego quieres terminarlo,
+> **`terminate` reactiva el ASG automáticamente** antes de desmontarlo (ver §7), para no dejar
+> instancias huérfanas que atasquen el borrado.
 
 ---
 
@@ -207,12 +225,19 @@ atasca** (una instancia huérfana retiene el Security Group y el environment "vu
 1. **Antes de terminar**, si el autoescalado del environment estaba suspendido, lo **reanuda** para que
    CloudFormation pueda matar la instancia y no la deje huérfana.
 2. **Espera a que quede `Terminated` de verdad** (no solo `Terminating`).
-3. Si se atasca, **detecta las instancias huérfanas** y te imprime el comando exacto para eliminarlas
-   con un perfil admin y reintentar:
+3. Si se atasca, **detecta las instancias huérfanas** (incluso `stopped`, p. ej. de un `power off`
+   previo con el ASG ya borrado) y, si el perfil tiene permisos EC2, **las termina automáticamente**,
+   espera a que liberen el Security Group y **reintenta** el desmontaje — sin intervención manual.
+4. Si el perfil **no** tiene `ec2:TerminateInstances` (caso de `eb-manager`), no puede limpiarlas:
+   imprime el comando exacto para que lo hagas con un perfil admin y reintenta:
    ```bash
    aws ec2 terminate-instances --instance-ids i-xxxx --profile default --region us-east-2
    ```
 
+> **Tip:** para que la auto-limpieza funcione sola, ejecuta el `terminate` con un perfil que tenga EC2
+> (`--profile default`). Con `eb-manager` el terminate funciona, pero si se atasca tendrás que limpiar
+> la huérfana a mano (paso 4).
+>
 > Recomendación para producción: migra primero dev, y al terminar el environment viejo de producción
 > deja la réplica AL2023 validada y el CodePipeline ya reapuntado.
 
@@ -300,8 +325,10 @@ eb-migrator-java/
   que `eb-manager` no tiene → usa `--profile default`.
 
 - **`terminate` se queda en `Terminating` y el environment vuelve a `Green`:** una instancia huérfana
-  retiene el Security Group. El comando ya lo detecta y reporta; elimina la(s) instancia(s) con
-  `aws ec2 terminate-instances --instance-ids ... --profile default` y reintenta `terminate`.
+  (a veces `stopped`) retiene el Security Group. Si ejecutas el comando con un perfil con permisos EC2
+  (`--profile default`), **lo resuelve solo**: termina la huérfana y reintenta. Con `eb-manager` no puede
+  (sin EC2): elimina la(s) instancia(s) con `aws ec2 terminate-instances --instance-ids ... --profile default`
+  y reintenta `terminate`.
 
 - **`power off/on` falla con `UnauthorizedOperation`:** el perfil no tiene `ec2:Stop/StartInstances`.
   Usa `--profile default` (admin). El paso de suspender el ASG sí se aplicó.
