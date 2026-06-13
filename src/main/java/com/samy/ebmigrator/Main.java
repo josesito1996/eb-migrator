@@ -6,6 +6,7 @@ import com.samy.ebmigrator.cli.Cli;
 import com.samy.ebmigrator.cli.InteractiveConsole;
 import com.samy.ebmigrator.cli.MigrateCommand;
 import com.samy.ebmigrator.cli.PowerCommand;
+import com.samy.ebmigrator.cli.RepointPipelineCommand;
 import com.samy.ebmigrator.cli.SwapCommand;
 import com.samy.ebmigrator.cli.TerminateCommand;
 
@@ -59,6 +60,10 @@ public final class Main {
                     exit = new SwapCommand(aws, assumeYes)
                             .run(required(flags, "from"), required(flags, "to"));
                     break;
+                case "repoint-pipeline":
+                    exit = new RepointPipelineCommand(aws, assumeYes)
+                            .run(required(flags, "from"), required(flags, "to"));
+                    break;
                 case "terminate":
                     exit = new TerminateCommand(aws, assumeYes).run(required(flags, "env"));
                     break;
@@ -109,6 +114,9 @@ public final class Main {
                 "  create-replica --env NOMBRE        Crea la réplica AL2023 (no toca producción) y espera Ready.",
                 "                 [--target-stack S]  Solution stack destino (auto-detectado si se omite).",
                 "  swap --from VIEJO --to NUEVO       Intercambia las URLs para preservar la de producción.",
+                "  repoint-pipeline --from VIEJO --to NUEVO",
+                "                                     Reapunta la etapa Deploy de CodePipeline al nuevo environment.",
+                "                                     (requiere permisos CodePipeline → usa --profile default)",
                 "  terminate --env NOMBRE             Da de baja un environment (destructivo, espera a Terminated).",
                 "  power --env NOMBRE --state E       Autoescalado/encendido: E = off | on | manage.",
                 "                                     off=suspende ASG y apaga · on=enciende · manage=reanuda ASG.",
@@ -124,7 +132,8 @@ public final class Main {
                 "  eb-migrator create-replica --env Samyappcasos-env",
                 "  # validar la URL temporal…",
                 "  eb-migrator swap --from Samyappcasos-env --to Samyappcasos-env-al2023",
-                "  # validar producción y reapuntar el CodePipeline…",
+                "  # validar producción…",
+                "  eb-migrator repoint-pipeline --from Samyappcasos-env --to Samyappcasos-env-al2023 --profile default",
                 "  eb-migrator terminate --env Samyappcasos-env"));
     }
 }

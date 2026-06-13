@@ -64,10 +64,12 @@ Perfil AWS [eb-manager]:           ← Enter usa el valor por defecto
 Región [us-east-2]:
 
 ------------------------ MENÚ ------------------------
-  1) audit           Inventario de environments (solo lectura)
-  2) create-replica  Crear réplica AL2023 (no toca producción)
-  3) swap            Intercambiar URLs (afecta producción)
-  4) terminate       Dar de baja un environment (destructivo)
+  1) audit             Inventario de environments (solo lectura)
+  2) create-replica    Crear réplica AL2023 (no toca producción)
+  3) swap              Intercambiar URLs (afecta producción)
+  4) repoint-pipeline  Reapuntar la etapa Deploy de CodePipeline al nuevo env
+  5) terminate         Dar de baja un environment (destructivo)
+  6) power             Suspender autoescalado / apagar / encender
   0) salir
 ------------------------------------------------------
 Elige una opción [0]:
@@ -87,6 +89,7 @@ java -jar target/eb-migrator-1.0.0.jar <comando> [--flags]
 | `audit` | Inventario de environments con su plataforma y salud; marca `DEPRECADA (AL2)` / `RETIRADA` / `OK`. **Solo lectura.** | No |
 | `create-replica --env NOMBRE [--target-stack "..."]` | Crea la réplica AL2023 (plantilla → versión de app → environment) y espera a `Ready`. Imprime la URL temporal. | No |
 | `swap --from VIEJO --to NUEVO` | Intercambia los CNAMEs para preservar la URL. Reversible. | **Sí** |
+| `repoint-pipeline --from VIEJO --to NUEVO` | Reapunta la etapa Deploy de CodePipeline (clave `EnvironmentName`) del environment viejo al nuevo. Escanea todos los pipelines, hace backup y cambio quirúrgico. **Requiere permisos CodePipeline** (`--profile default`). Reversible (invierte `--from/--to`). | Pipeline (no toca tráfico) |
 | `terminate --env NOMBRE` | Da de baja un environment. **Destructivo**, exige teclear el nombre exacto. Espera a `Terminated` real y detecta huérfanas. | Destructivo |
 | `power --env NOMBRE --state off\|on\|manage` | Controla el autoescalado y el encendido (ver §6). | Apaga/enciende |
 
@@ -123,9 +126,13 @@ java -jar target/eb-migrator-1.0.0.jar create-replica --env Samyappcasos-env
 java -jar target/eb-migrator-1.0.0.jar swap --from Samyappcasos-env --to Samyappcasos-env-al2023
 
 #    → validar la URL de PRODUCCIÓN tras el swap (propagación DNS ~1-2 min)
-#    → REAPUNTAR el CodePipeline (etapa Deploy) al nuevo nombre de environment
 
-# 4. Cuando todo esté confirmado, dar de baja el environment viejo (destructivo)
+# 4. Reapuntar el CodePipeline (etapa Deploy) al nuevo environment
+#    (requiere permisos CodePipeline → perfil admin)
+java -jar target/eb-migrator-1.0.0.jar repoint-pipeline \
+     --from Samyappcasos-env --to Samyappcasos-env-al2023 --profile default
+
+# 5. Cuando todo esté confirmado, dar de baja el environment viejo (destructivo)
 java -jar target/eb-migrator-1.0.0.jar terminate --env Samyappcasos-env
 ```
 
@@ -211,6 +218,38 @@ atasca** (una instancia huérfana retiene el Security Group y el environment "vu
 
 ---
 
+## 7.b Reapuntar el CodePipeline al nuevo environment (`repoint-pipeline`)
+
+Cada environment con CI/CD se referencia en su pipeline **por nombre** (clave `EnvironmentName`
+de la acción Deploy de Elastic Beanstalk). Tras el `swap` los nombres quedan cruzados y el viejo
+se va a terminar, así que el próximo push **fallaría en la etapa Deploy** si el pipeline sigue
+apuntando al environment viejo. Este comando lo arregla:
+
+```bash
+java -jar target/eb-migrator-1.0.0.jar \
+     repoint-pipeline --from Samyappcasos-env --to Samyappcasos-env-al2023 --profile default
+```
+
+Qué hace por dentro:
+
+1. **Escanea todos los pipelines** de la región y localiza las acciones Deploy de EB que apuntan
+   al environment `--from` (no necesitas saber el nombre del pipeline).
+2. Las **lista y pide confirmación**.
+3. **Hace backup** del pipeline a un archivo `<pipeline>.backup-<timestamp>.json` en el directorio actual.
+4. **Cambio quirúrgico:** reemplaza solo `EnvironmentName` por el valor `--to`. Todo lo demás
+   (Source/GitHub, Build/CodeBuild, roles, token OAuth) se conserva intacto.
+
+> **Permisos:** requiere `codepipeline:ListPipelines/GetPipeline/UpdatePipeline`. El perfil
+> `eb-manager` (solo Elastic Beanstalk) **no** los tiene → usa `--profile default` (admin). Si falta
+> el permiso, el comando lo detecta y te dice exactamente eso.
+>
+> **Reversible:** el reapuntado es simétrico. Para deshacerlo, invierte los environments:
+> `repoint-pipeline --from Samyappcasos-env-al2023 --to Samyappcasos-env`.
+>
+> Hazlo **antes** del `terminate` del viejo, y verifica con un push o una ejecución manual del pipeline.
+
+---
+
 ## 8. Estructura del proyecto
 
 ```
@@ -222,6 +261,7 @@ eb-migrator-java/
     │   ├── AwsClients.java       # Fábrica de clientes SDK (perfil local, sin credenciales en código)
     │   ├── Platforms.java        # Clasifica solution stacks (AL2 deprecado / rama retirada / OK)
     │   ├── MigrateService.java   # Lógica Blue/Green (los pasos del procedimiento)
+    │   ├── PipelineService.java  # CodePipeline: localiza y reapunta la etapa Deploy al nuevo env
     │   └── PowerService.java     # ASG + EC2: suspender/reanudar autoescalado, apagar/encender, huérfanas
     └── cli/
         ├── Cli.java              # parseo de flags + prompts/confirmaciones por consola
@@ -229,6 +269,7 @@ eb-migrator-java/
         ├── AuditCommand.java     # audit (read-only)
         ├── MigrateCommand.java   # create-replica
         ├── SwapCommand.java      # swap
+        ├── RepointPipelineCommand.java # repoint-pipeline (reapunta la etapa Deploy)
         ├── TerminateCommand.java # terminate (robusto: reanuda ASG, espera Terminated, reporta huérfanas)
         └── PowerCommand.java     # power (off/on/manage)
 ```
@@ -254,8 +295,9 @@ eb-migrator-java/
   desplegada en el bucket gestionado de EB. Confírmalo con la consola o con `describe-environments`.
 
 - **Tras el swap, el auto-deploy (CodePipeline) falla:** cada environment con CI/CD lo referencia
-  por **nombre** en la etapa Deploy. Tras el swap, reapunta el pipeline al nuevo nombre
-  (`<env>-al2023`). Esto **no** lo hace el utilitario; requiere permisos de CodePipeline.
+  por **nombre** en la etapa Deploy. Tras el swap, reapunta el pipeline al nuevo nombre con
+  `repoint-pipeline --from <viejo> --to <nuevo>` (ver §7.b). Requiere permisos de CodePipeline,
+  que `eb-manager` no tiene → usa `--profile default`.
 
 - **`terminate` se queda en `Terminating` y el environment vuelve a `Green`:** una instancia huérfana
   retiene el Security Group. El comando ya lo detecta y reporta; elimina la(s) instancia(s) con

@@ -57,9 +57,12 @@ public final class InteractiveConsole {
                         doSwap(aws);
                         break;
                     case "4":
-                        doTerminate(aws);
+                        doRepointPipeline(aws);
                         break;
                     case "5":
+                        doTerminate(aws);
+                        break;
+                    case "6":
                         doPower(aws);
                         break;
                     case "0":
@@ -83,11 +86,12 @@ public final class InteractiveConsole {
     private void printMenu() {
         System.out.println();
         System.out.println("------------------------ MENÚ ------------------------");
-        System.out.println("  1) audit           Inventario de environments (solo lectura)");
-        System.out.println("  2) create-replica  Crear réplica AL2023 (no toca producción)");
-        System.out.println("  3) swap            Intercambiar URLs (afecta producción)");
-        System.out.println("  4) terminate       Dar de baja un environment (destructivo)");
-        System.out.println("  5) power           Suspender autoescalado / apagar / encender");
+        System.out.println("  1) audit             Inventario de environments (solo lectura)");
+        System.out.println("  2) create-replica    Crear réplica AL2023 (no toca producción)");
+        System.out.println("  3) swap              Intercambiar URLs (afecta producción)");
+        System.out.println("  4) repoint-pipeline  Reapuntar la etapa Deploy de CodePipeline al nuevo env");
+        System.out.println("  5) terminate         Dar de baja un environment (destructivo)");
+        System.out.println("  6) power             Suspender autoescalado / apagar / encender");
         System.out.println("  0) salir");
         System.out.println("------------------------------------------------------");
     }
@@ -102,6 +106,14 @@ public final class InteractiveConsole {
         String from = Cli.promptRequired("Environment FROM (el que cede su URL)");
         String to = Cli.promptRequired("Environment TO (el que tomará la URL)");
         new SwapCommand(aws, false).run(from, to);
+    }
+
+    private void doRepointPipeline(AwsClients aws) {
+        String from = Cli.promptRequired("Environment VIEJO (al que apunta el pipeline ahora)");
+        String to = Cli.promptRequired("Environment NUEVO (al que debe apuntar)");
+        System.out.println("Nota: necesita permisos de CodePipeline; 'eb-manager' no los tiene.");
+        System.out.println("      Si falla por permisos, relanza el menú con el perfil 'default'.");
+        new RepointPipelineCommand(aws, false).run(from, to);
     }
 
     private void doTerminate(AwsClients aws) throws InterruptedException {

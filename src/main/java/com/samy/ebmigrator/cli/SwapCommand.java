@@ -35,9 +35,11 @@ public final class SwapCommand {
         svc.swapCnames(fromEnv, toEnv);
         System.out.println("✅ Swap solicitado. La propagación DNS tarda ~1-2 min.");
         System.out.println("Valida la URL de producción y luego, si todo va bien:");
-        System.out.printf("   eb-migrator terminate --env %s%n", fromEnv);
         System.out.println();
-        System.out.println("⚠ Recuerda reapuntar el CodePipeline (etapa Deploy) al nuevo nombre de environment.");
+        System.out.println("  1) Reapunta el CodePipeline (etapa Deploy) al nuevo environment:");
+        System.out.printf("       eb-migrator repoint-pipeline --from %s --to %s --profile default%n", fromEnv, toEnv);
+        System.out.println("  2) Da de baja el environment viejo:");
+        System.out.printf("       eb-migrator terminate --env %s%n", fromEnv);
         return 0;
     }
 }
