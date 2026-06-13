@@ -7,6 +7,7 @@ import com.samy.ebmigrator.cli.InteractiveConsole;
 import com.samy.ebmigrator.cli.MigrateCommand;
 import com.samy.ebmigrator.cli.PowerCommand;
 import com.samy.ebmigrator.cli.RepointPipelineCommand;
+import com.samy.ebmigrator.cli.ResizeCommand;
 import com.samy.ebmigrator.cli.SwapCommand;
 import com.samy.ebmigrator.cli.TerminateCommand;
 
@@ -71,6 +72,10 @@ public final class Main {
                     exit = new PowerCommand(aws, assumeYes)
                             .run(required(flags, "env"), required(flags, "state"));
                     break;
+                case "resize":
+                    exit = new ResizeCommand(aws, assumeYes)
+                            .run(required(flags, "env"), flags.get("to"));
+                    break;
                 default:
                     System.err.println("Comando desconocido: " + command);
                     printUsage();
@@ -126,6 +131,9 @@ public final class Main {
                 "                                       reboot       reinicia la instancia",
                 "                                       terminate-instance  destruye la instancia EC2",
                 "                                     (stop/start/reboot/terminate-instance requieren EC2 → --profile default)",
+                "  resize --env NOMBRE [--to TIPO]    Cambia el tipo de instancia (t2 → t3/t3a, sube RAM).",
+                "                                     Sin --to sugiere un destino t3a y lo pide por consola.",
+                "                                     Solo Elastic Beanstalk → basta el perfil eb-manager.",
                 "",
                 "Flags globales:",
                 "  --profile P   Perfil AWS CLI (def. " + DEFAULT_PROFILE + ")",

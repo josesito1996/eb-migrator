@@ -70,6 +70,7 @@ Región [us-east-2]:
   4) repoint-pipeline  Reapuntar la etapa Deploy de CodePipeline al nuevo env
   5) terminate         Dar de baja un environment (destructivo)
   6) power             Suspender autoescalado / apagar / encender
+  7) resize            Cambiar el tipo de instancia (t2 → t3/t3a, subir RAM)
   0) salir
 ------------------------------------------------------
 Elige una opción [0]:
@@ -92,6 +93,7 @@ java -jar target/eb-migrator-1.0.0.jar <comando> [--flags]
 | `repoint-pipeline --from VIEJO --to NUEVO` | Reapunta la etapa Deploy de CodePipeline (clave `EnvironmentName`) del environment viejo al nuevo. Escanea todos los pipelines, hace backup y cambio quirúrgico. **Requiere permisos CodePipeline** (`--profile default`). Reversible (invierte `--from/--to`). | Pipeline (no toca tráfico) |
 | `terminate --env NOMBRE` | Da de baja un environment. **Destructivo**, exige teclear el nombre exacto. Espera a `Terminated` real y detecta huérfanas. | Destructivo |
 | `power --env NOMBRE --state ESTADO` | Controla el **escalado** (`scaling-off`/`scaling-on`) y la **instancia** (`stop`/`start`/`reboot`/`terminate-instance`). Ver §6. | Según estado |
+| `resize --env NOMBRE [--to TIPO]` | Cambia el **tipo de instancia** (migra familia `t2` → `t3`/`t3a` y/o sube la RAM) vía `update-environment`. Sin `--to` sugiere un destino y lo pide por consola. Ver §6.b. | **Sí** (reemplaza la instancia: breve corte en SingleInstance) |
 
 **Flags globales:**
 
@@ -216,6 +218,48 @@ queda desactivado (solo reintentas el apagado con el perfil admin).
 
 ---
 
+## 6.b Cambiar el tipo de instancia (`resize`)
+
+Migra la familia **`t2`** (burstable, deprecada) a **`t3`/`t3a`** (Nitro, ~10% más barata en `t3a`) y/o
+**sube la RAM** para quitar la presión de memoria / GC de la JVM (Spring Boot / Java 11) que provoca
+picos de latencia (ver [contexto §6](../CONTEXTO-MIGRACION-EB.md#6-migración-de-tipo-de-instancia-t2--t3t3a)).
+
+El cambio se aplica con `update-environment` sobre la opción `aws:ec2:instances / InstanceTypes`:
+**solo toca Elastic Beanstalk**, así que basta el perfil `eb-manager` (no necesita permisos EC2).
+
+```bash
+# Indicando el tipo destino explícitamente
+java -jar target/eb-migrator-1.0.0.jar resize --env Samyappprimary-env-prod --to t3a.small
+
+# Sin --to: muestra el tipo actual, sugiere un destino (t3a, un tamaño más grande) y lo pide por consola
+java -jar target/eb-migrator-1.0.0.jar resize --env Samyappcasos-env-prod
+```
+
+Qué hace por dentro:
+
+1. **Lee el tipo actual** del environment (opción moderna `aws:ec2:instances/InstanceTypes`, con
+   *fallback* a la heredada `aws:autoscaling:launchconfiguration/InstanceType`) y si es **SingleInstance**.
+2. **Sugiere** dos destinos en familia `t3a`: el *drop-in* (misma RAM) y **subir un tamaño** (más RAM,
+   recomendado para JVM con presión de memoria). Si no pasas `--to`, propone el de más RAM y lo pide.
+3. **Avisa de la indisponibilidad**: en SingleInstance, cambiar el tipo **reemplaza la instancia** →
+   breve corte del servicio. Pide confirmación.
+4. **Aplica** `update-environment` y **espera a que vuelva a `Ready`** (sondeo cada 15 s, timeout 15 min).
+5. **Recuerda ajustar el heap de la JVM (`-Xmx`)** acorde a la nueva RAM.
+
+> **Mapeo `t2 → t3/t3a` (CONTEXTO §6):** mismo nº de vCPU/RAM entre `t3` (Intel) y `t3a` (AMD, ~10% más
+> barato). Para JVM/Spring Boot que recibe prod, **drop-in no basta** (`t2.micro → t3.micro` mantiene 1 GB,
+> y la app está al 92%): subir a **`t3a.small` (2 GB)** como mínimo. Node/estáticos y bajo tráfico →
+> drop-in `t3a.micro`. Fallback a `t3` si la AZ no tiene `t3a`.
+
+> **Permisos:** `resize` solo usa Elastic Beanstalk (`elasticbeanstalk:UpdateEnvironment` /
+> `DescribeConfigurationSettings`), incluidos en `AdministratorAccess-AWSElasticBeanstalk` → funciona con
+> `eb-manager`, **no** requiere `--profile default`.
+>
+> **Modo no interactivo:** con `--yes` debes indicar `--to` (no se adivina un cambio que reemplaza la
+> instancia). En modo interactivo, sin `--to` se sugiere uno y se pide por consola.
+
+---
+
 ## 7. Migrar producción con seguridad (terminate robusto)
 
 Migrar producción usa el **mismo flujo** Blue/Green. La diferencia está en el `terminate` del
@@ -287,7 +331,9 @@ eb-migrator-java/
     │   ├── Platforms.java        # Clasifica solution stacks (AL2 deprecado / rama retirada / OK)
     │   ├── MigrateService.java   # Lógica Blue/Green (los pasos del procedimiento)
     │   ├── PipelineService.java  # CodePipeline: localiza y reapunta la etapa Deploy al nuevo env
-    │   └── PowerService.java     # ASG + EC2: suspender/reanudar autoescalado, apagar/encender, huérfanas
+    │   ├── PowerService.java     # ASG + EC2: suspender/reanudar autoescalado, apagar/encender, huérfanas
+    │   ├── ResizeService.java    # EB: lee/aplica el tipo de instancia (update-environment) y espera Ready
+    │   └── InstanceTypes.java    # Mapeo y validación t2 → t3/t3a (tamaños, RAM, drop-in/upsize)
     └── cli/
         ├── Cli.java              # parseo de flags + prompts/confirmaciones por consola
         ├── InteractiveConsole.java  # Menú interactivo (modo sin flags)
@@ -296,7 +342,8 @@ eb-migrator-java/
         ├── SwapCommand.java      # swap
         ├── RepointPipelineCommand.java # repoint-pipeline (reapunta la etapa Deploy)
         ├── TerminateCommand.java # terminate (robusto: reanuda ASG, espera Terminated, reporta huérfanas)
-        └── PowerCommand.java     # power (off/on/manage)
+        ├── PowerCommand.java     # power (off/on/manage)
+        └── ResizeCommand.java    # resize (cambio de tipo de instancia t2 → t3/t3a)
 ```
 
 ---

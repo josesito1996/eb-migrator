@@ -65,6 +65,9 @@ public final class InteractiveConsole {
                     case "6":
                         doPower(aws);
                         break;
+                    case "7":
+                        doResize(aws);
+                        break;
                     case "0":
                         System.out.println("Hasta luego.");
                         return 0;
@@ -92,6 +95,7 @@ public final class InteractiveConsole {
         System.out.println("  4) repoint-pipeline  Reapuntar la etapa Deploy de CodePipeline al nuevo env");
         System.out.println("  5) terminate         Dar de baja un environment (destructivo)");
         System.out.println("  6) power             Escalado on/off · apagar/encender/reiniciar/terminar instancia");
+        System.out.println("  7) resize            Cambiar el tipo de instancia (t2 -> t3/t3a, subir RAM)");
         System.out.println("  0) salir");
         System.out.println("------------------------------------------------------");
     }
@@ -130,5 +134,13 @@ public final class InteractiveConsole {
         String state = Cli.prompt("Estado", "scaling-off");
         System.out.println("Recuerda: stop/start/reboot/terminate-instance necesitan un perfil con permisos EC2 (ej. default).");
         new PowerCommand(aws, false).run(env, state);
+    }
+
+    private void doResize(AwsClients aws) {
+        String env = Cli.promptRequired("Environment a redimensionar");
+        System.out.println("Deja el tipo destino en blanco para que sugiera uno (familia t3a, subiendo un tamaño).");
+        System.out.println("Solo toca Elastic Beanstalk → basta el perfil eb-manager.");
+        String to = Cli.prompt("Tipo destino (Enter = sugerir)", null);
+        new ResizeCommand(aws, false).run(env, to);
     }
 }

@@ -126,6 +126,29 @@ public final class MigrateService {
     }
 
     /**
+     * Paso 2b: copia el artefacto a una ubicación ESTABLE e independiente del environment
+     * ({@code eb-migrator/<app>/<versionLabel>.<ext>}) en el mismo bucket de EB.
+     *
+     * Es imprescindible: el artefacto del Paso 2 vive bajo
+     * {@code resources/environments/<env-id>/_runtime/_versions/...}, prefijo que EB BORRA al
+     * **terminar el environment origen**. Si la versión de app apuntara directamente ahí, quedaría
+     * colgada (S3 404 NoSuchKey) y cualquier reemplazo de instancia del env migrado (resize, scaling,
+     * instance refresh) fallaría al re-descargar el bundle. Copiándolo a una clave estable, la versión
+     * sobrevive a la terminación del origen.
+     *
+     * @return la ubicación del artefacto copiado (la que debe usarse para registrar la versión).
+     */
+    public ArtifactLocation copyToStableLocation(ArtifactLocation src, String app, String versionLabel) {
+        String lower = src.key().toLowerCase(Locale.ROOT);
+        String ext = lower.endsWith(".jar") ? ".jar" : lower.endsWith(".war") ? ".war" : ".zip";
+        String destKey = String.format("eb-migrator/%s/%s%s", app, versionLabel, ext);
+        aws.s3().copyObject(b -> b
+                .sourceBucket(src.bucket()).sourceKey(src.key())
+                .destinationBucket(src.bucket()).destinationKey(destKey));
+        return new ArtifactLocation(src.bucket(), destKey, src.size());
+    }
+
+    /**
      * Paso 3: registra una nueva versión de la app apuntando al artefacto del bucket de EB.
      * Idempotente: si la version label ya existe (intento previo), la elimina primero
      * SIN borrar el bundle en S3 (es el artefacto desplegado, no debe tocarse).

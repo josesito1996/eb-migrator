@@ -69,8 +69,13 @@ public final class MigrateCommand {
 
         // Paso 2
         System.out.println("[2/4] Localizando el artefacto desplegado en S3…");
-        ArtifactLocation artifact = svc.locateDeployedArtifact(envId, app);
-        System.out.printf("      → %s%n", artifact);
+        ArtifactLocation deployed = svc.locateDeployedArtifact(envId, app);
+        System.out.printf("      → %s%n", deployed);
+        // Copia a una ubicación estable: el artefacto desplegado vive bajo el prefijo del env origen,
+        // que EB borra al terminarlo. Apuntar la versión a una clave estable evita que quede colgada
+        // (S3 404) y que un futuro resize/reemplazo de instancia del env migrado falle.
+        ArtifactLocation artifact = svc.copyToStableLocation(deployed, app, versionLabel);
+        System.out.printf("      ↳ copiado a ubicación estable: %s%n", artifact);
 
         // Paso 3
         System.out.println("[3/4] Registrando versión de la app desde el bucket de EB…");
