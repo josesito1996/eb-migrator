@@ -36,10 +36,31 @@ public final class AuditCommand {
             return 0;
         }
 
-        String header = String.format("%-28s %-32s %-9s %-8s %-16s",
-                "APLICACIÓN", "ENVIRONMENT", "STATUS", "HEALTH", "PLATAFORMA");
+        // Encabezados de cada columna.
+        String[] headers = {"APLICACIÓN", "ENVIRONMENT", "STATUS", "HEALTH", "PLATAFORMA", "SOLUTION STACK"};
+
+        // Calculamos el ancho de cada columna a partir del contenido real,
+        // de modo que ningún valor se recorte (el más largo manda).
+        int[] width = new int[headers.length];
+        for (int i = 0; i < headers.length; i++) {
+            width[i] = headers[i].length();
+        }
+        for (EnvironmentDescription e : envs) {
+            width[0] = Math.max(width[0], safe(e.applicationName()).length());
+            width[1] = Math.max(width[1], safe(e.environmentName()).length());
+            width[2] = Math.max(width[2], safe(e.statusAsString()).length());
+            width[3] = Math.max(width[3], safe(e.healthAsString()).length());
+            width[4] = Math.max(width[4], Platforms.status(e.solutionStackName()).length());
+            width[5] = Math.max(width[5], safe(e.solutionStackName()).length());
+        }
+
+        String fmt = String.format("%%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds%n",
+                width[0], width[1], width[2], width[3], width[4], width[5]);
+
+        String header = String.format(fmt,
+                (Object[]) headers).stripTrailing();
         System.out.println(header);
-        System.out.println("-".repeat(header.length() + 30));
+        System.out.println("-".repeat(header.length()));
 
         int deprecated = 0;
         for (EnvironmentDescription e : envs) {
@@ -47,13 +68,13 @@ public final class AuditCommand {
             String platStatus = Platforms.status(stack);
             if (!"OK".equals(platStatus)) deprecated++;
 
-            System.out.println(String.format("%-28s %-32s %-9s %-8s %-16s  %s",
-                    trunc(e.applicationName(), 28),
-                    trunc(e.environmentName(), 32),
-                    e.statusAsString(),
-                    e.healthAsString(),
+            System.out.print(String.format(fmt,
+                    safe(e.applicationName()),
+                    safe(e.environmentName()),
+                    safe(e.statusAsString()),
+                    safe(e.healthAsString()),
                     platStatus,
-                    stack));
+                    safe(stack)));
         }
 
         System.out.println();
@@ -62,8 +83,7 @@ public final class AuditCommand {
         return 0;
     }
 
-    private static String trunc(String s, int max) {
-        if (s == null) return "";
-        return s.length() <= max ? s : s.substring(0, max - 1) + "…";
+    private static String safe(String s) {
+        return s == null ? "" : s;
     }
 }
